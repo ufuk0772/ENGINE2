@@ -1,0 +1,23 @@
+# Universal Data Ingestion Layer + DataLens Dashboard
+# Tested with Python 3.11+
+
+# Core data processing
+pandas==2.2.2
+numpy>=1.26.0
+openpyxl==3.1.2          # Excel (.xlsx) support for pandas
+xlrd==2.0.1              # Legacy Excel (.xls) support
+
+# Database
+sqlalchemy==2.0.30
+psycopg2-binary==2.9.9   # PostgreSQL adapter (binary = no compile needed)
+
+# Dashboard (DataLens MVP)
+streamlit>=1.35.0
+plotly>=5.22.0
+
+# Utilities
+python-dotenv==1.0.1     # Load .env files for local development
+
+# Optional: testing
+pytest==8.2.2
+pytest-cov==5.0.0

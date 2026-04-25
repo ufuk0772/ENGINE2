@@ -1,0 +1,66 @@
+version: "3.9"
+
+# =============================================================================
+# Universal Data Ingestion Layer — Docker Compose
+# =============================================================================
+# Starts a PostgreSQL instance and the ingestion app.
+#
+# Usage:
+#   docker compose up -d postgres        # start DB only
+#   docker compose run --rm app          # run ingestion with default sample file
+#   docker compose run --rm app python -m app.main --file data/my_file.csv
+# =============================================================================
+
+services:
+
+  # ---------------------------------------------------------------------------
+  # PostgreSQL 16
+  # ---------------------------------------------------------------------------
+  postgres:
+    image: postgres:16-alpine
+    container_name: ingestion_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-ingestion_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-ingestion_pass}
+      POSTGRES_DB: ${POSTGRES_DB:-ingestion_db}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./sql/schema.sql:/docker-entrypoint-initdb.d/01_schema.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-ingestion_user} -d ${POSTGRES_DB:-ingestion_db}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+  # ---------------------------------------------------------------------------
+  # Ingestion App
+  # ---------------------------------------------------------------------------
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: ingestion_app
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-ingestion_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-ingestion_pass}
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: ${POSTGRES_DB:-ingestion_db}
+    volumes:
+      - ./data:/app/data:ro       # Mount local data directory (read-only)
+    command: >
+      python -m app.main
+        --file data/sample_data.csv
+        --name "Sample Sales Data"
+        --init-db
+
+volumes:
+  postgres_data:
+    driver: local
