@@ -9,7 +9,7 @@ xlrd==2.0.1              # Legacy Excel (.xls) support
 
 # Database
 sqlalchemy==2.0.30
-psycopg2-binary==2.9.9   # PostgreSQL adapter (binary = no compile needed)
+psycopg2-binary  # PostgreSQL adapter (binary = no compile needed)
 
 # Dashboard (DataLens MVP)
 streamlit>=1.35.0
