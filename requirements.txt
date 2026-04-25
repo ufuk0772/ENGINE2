@@ -21,3 +21,12 @@ python-dotenv==1.0.1     # Load .env files for local development
 # Optional: testing
 pytest==8.2.2
 pytest-cov==5.0.0
+
+streamlit
+pandas
+numpy
+plotly
+scipy
+statsmodels
+openpyxl
+xlrd
