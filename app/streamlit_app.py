@@ -27,6 +27,7 @@ import warnings
 warnings.filterwarnings("ignore")
 from scipy.stats import linregress, skew, kurtosis
 from statsmodels.tsa.stattools import adfuller, acf
+import statsmodels.api as sm
 # ─── PAGE CONFIG (MUST BE FIRST ST CALL) ─────────────────────────────────────
 st.set_page_config(
     page_title="FMCG Intel | Enterprise Analytics",
@@ -1360,6 +1361,113 @@ def render_data_hub():
 
 
 # ─── SALES & DEMAND PAGE ──────────────────────────────────────────────────────
+def compute_price_elasticity(df, price_col, sales_col):
+    temp = df.copy()
+    temp[price_col] = pd.to_numeric(temp[price_col], errors="coerce")
+    temp[sales_col] = pd.to_numeric(temp[sales_col], errors="coerce")
+    temp = temp.dropna(subset=[price_col, sales_col])
+    temp = temp[(temp[price_col] > 0) & (temp[sales_col] > 0)]
+
+    if len(temp) < 10:
+        return None, None, None
+
+    temp["log_price"] = np.log(temp[price_col])
+    temp["log_sales"] = np.log(temp[sales_col])
+
+    X = sm.add_constant(temp["log_price"])
+    y = temp["log_sales"]
+
+    model = sm.OLS(y, X).fit()
+    return model.params["log_price"], model.rsquared, model.pvalues["log_price"]
+
+
+def simulate_price_change(df, price_col, sales_col, elasticity, pct):
+    temp = df.copy()
+    temp[price_col] = pd.to_numeric(temp[price_col], errors="coerce")
+    temp[sales_col] = pd.to_numeric(temp[sales_col], errors="coerce")
+    temp = temp.dropna(subset=[price_col, sales_col])
+    temp = temp[(temp[price_col] > 0) & (temp[sales_col] > 0)]
+
+    p = temp[price_col].mean()
+    q = temp[sales_col].mean()
+
+    old_rev = p * q
+    new_p = p * (1 + pct)
+    new_q = q * (1 + elasticity * pct)
+
+    return old_rev, new_p * new_q
+
+
+def render_price_elasticity_analysis(df):
+    st.markdown("---")
+    st.markdown("## 📊 Price Elasticity Analysis")
+    st.caption("Fiyat değişiminin talep ve gelir üzerindeki etkisini ölçer.")
+
+    num_cols = df.select_dtypes(include="number").columns.tolist()
+
+    if len(num_cols) < 2:
+        st.warning("Fiyat ve satış kolonu gerekli.")
+        return
+
+    c1, c2 = st.columns(2)
+
+    default_price_index = num_cols.index("fiyat") if "fiyat" in num_cols else 0
+    default_sales_index = num_cols.index("satış_hacmi") if "satış_hacmi" in num_cols else min(1, len(num_cols) - 1)
+
+    price_col = c1.selectbox(
+        "Price Column",
+        num_cols,
+        index=num_cols.index("fiyat") if "fiyat" in num_cols else 0,
+        key="pe_price"
+    )
+
+    sales_options = [c for c in num_cols if c != price_col]
+
+    sales_col = c2.selectbox(
+        "Sales Column",
+        sales_options,
+        index=sales_options.index("satış_hacmi") if "satış_hacmi" in sales_options else 0,
+        key="pe_sales"
+   )
+
+    e, r2, p_val = compute_price_elasticity(df, price_col, sales_col)
+
+    if e is None:
+        st.warning("Yetersiz veri. En az 10 pozitif fiyat/satış gözlemi gerekli.")
+        return
+
+    left, right = st.columns([2, 1])
+
+    with left:
+        fig = px.scatter(
+            df,
+            x=price_col,
+            y=sales_col,
+            trendline="ols",
+            title="Price vs Sales Relationship"
+        )
+        fig.update_layout(**PLOTLY_LAYOUT, height=360)
+        st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
+
+    with right:
+        st.metric("Elasticity", f"{e:.2f}")
+        st.metric("Model R²", f"{r2:.3f}")
+        st.metric("p-value", f"{p_val:.4f}")
+
+        pct = st.slider("Price Change %", -20, 20, 5, key="pe_slider") / 100
+
+        old_rev, new_rev = simulate_price_change(df, price_col, sales_col, e, pct)
+        impact = new_rev - old_rev
+        impact_pct = impact / old_rev * 100 if old_rev != 0 else 0
+
+        st.metric("Revenue Impact", f"{impact:,.0f}", delta=f"{impact_pct:.2f}%")
+
+        if e < -1:
+            st.warning("Talep fiyata duyarlı. Sert fiyat artışı riskli.")
+        elif -1 <= e < 0:
+            st.success("Talep düşük-orta duyarlı. Kontrollü fiyat artışı test edilebilir.")
+        else:
+            st.info("Pozitif/normal dışı esneklik. Kampanya, sezon veya veri etkisi olabilir.")
 def render_sales_demand():
     df = get_active_df()
 
@@ -1403,6 +1511,7 @@ def render_sales_demand():
     st.markdown('</div>', unsafe_allow_html=True)
     st.markdown("---")
     render_statistical_analysis_panel(df[sales_col])
+    render_price_elasticity_analysis(df)
     col_l, col_r = st.columns(2, gap="medium")
     with col_l:
         st.markdown('<div class="chart-card">', unsafe_allow_html=True)
