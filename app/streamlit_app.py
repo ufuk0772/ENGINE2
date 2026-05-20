@@ -28,6 +28,9 @@ warnings.filterwarnings("ignore")
 from scipy.stats import linregress, skew, kurtosis
 from statsmodels.tsa.stattools import adfuller, acf
 import statsmodels.api as sm
+import streamlit.components.v1 as components
+
+
 # ─── PAGE CONFIG (MUST BE FIRST ST CALL) ─────────────────────────────────────
 st.set_page_config(
     page_title="FMCG Intel | Enterprise Analytics",
@@ -2424,6 +2427,7 @@ def render_nav_sidebar():
         ("logistics", "🗺  Logistics Optimization"),
         ("finance", "💰 Finance Intelligence"),
         ("validation", "🧪 Model Validation"),
+        ("promo_opt", "🏷️  Promo Optimization"),
         ("data_hub", "🗄  Data Hub"),
         
     ]
@@ -2521,6 +2525,270 @@ def render_nav_sidebar():
             unsafe_allow_html=True,
         )
 
+from schema_engine import build_schema_map
+
+# ----------------------------
+# DATA ENGINE (SAFE FALLBACK)
+# ----------------------------
+def get_safe_df():
+    df = get_active_df()
+
+    if df is None or len(df) < 30:
+        np.random.seed(42)
+        dates = pd.date_range("2025-01-01", periods=200)
+
+        df = pd.DataFrame({
+            "A_Satis": np.random.normal(1200, 120, 200),
+            "A_Fiyat": np.random.choice([18, 22, 25], 200),
+
+            "B_Satis": np.random.normal(900, 90, 200),
+            "B_Fiyat": np.random.choice([20, 24, 27], 200),
+
+            "C_Satis": np.random.normal(700, 80, 200),
+            "C_Fiyat": np.random.choice([15, 19, 23], 200),
+        })
+
+        df["tarih"] = dates
+
+    return df
+
+
+# ----------------------------
+# COLUMN DETECTOR
+# ----------------------------
+def detect_products(df):
+    products = {}
+
+    for c in df.columns:
+        cl = c.lower()
+
+        if cl.endswith("_satis") or cl.endswith("_sales"):
+            base = c.replace("_Satis", "").replace("_Sales", "")
+            products.setdefault(base, {})["q"] = c
+
+        if cl.endswith("_fiyat") or cl.endswith("_price"):
+            base = c.replace("_Fiyat", "").replace("_Price", "")
+            products.setdefault(base, {})["p"] = c
+
+    return {k: v for k, v in products.items() if "q" in v and "p" in v}
+
+
+# ----------------------------
+# LEVEL 2: ROLLING ELASTICITY
+# ----------------------------
+def rolling_elasticity(df, q_col, p_col, window=30):
+    df = df[[q_col, p_col]].dropna().copy()
+    df = df[(df > 0).all(axis=1)]
+
+    if len(df) < window + 5:
+        return None, None
+
+    elasticities = []
+
+    for i in range(window, len(df)):
+        sub = df.iloc[i - window:i]
+
+        log_q = np.log(sub[q_col])
+        log_p = np.log(sub[p_col])
+
+        slope, _, _, _, _ = linregress(log_p, log_q)
+        elasticities.append(slope)
+
+    return np.mean(elasticities), np.std(elasticities)
+
+
+# ----------------------------
+# PROMO VS NON-PROMO UPLIFT
+# ----------------------------
+def compute_uplift(df, q_col, p_col):
+    threshold = df[p_col].median()
+
+    promo = df[df[p_col] < threshold][q_col]
+    baseline = df[df[p_col] >= threshold][q_col]
+
+    if len(promo) < 5 or len(baseline) < 5:
+        return 0
+
+    return ((promo.mean() - baseline.mean()) / baseline.mean()) * 100
+
+
+# ----------------------------
+# MAIN FUNCTION (LEVEL 2)
+# ----------------------------
+def render_promo_optimization():
+    df = get_safe_df()
+    _, products = build_schema_map(df)
+
+    if len(products) < 2:
+        st.warning("Yetersiz ürün yapısı")
+        return
+
+    st.markdown("## 📊 Quant Level 2 Promo & Cannibalization Engine")
+
+    names = list(products.keys())
+
+    c1, c2 = st.columns(2)
+
+    with c1:
+        target = st.selectbox("Hedef Ürün", names)
+
+    with c2:
+        competitor = st.selectbox("Kardeş Ürün", [p for p in names if p != target])
+
+    t_q, t_p = products[target]["q"], products[target]["p"]
+    c_q, c_p = products[competitor]["q"], products[competitor]["p"]
+
+    # ----------------------------
+    # ELASTICITIES (LEVEL 2)
+    # ----------------------------
+    own_mean, own_std = rolling_elasticity(df, t_q, t_p)
+    cross_mean, cross_std = rolling_elasticity(df, t_q, c_p)
+
+    # ----------------------------
+    # UPLIFT (CAUSAL LIKE APPROX)
+    # ----------------------------
+    lift_pct = compute_uplift(df, t_q, t_p)
+
+    # ----------------------------
+    # COMP REVENUE BASELINE
+    # ----------------------------
+    comp_revenue = (df[c_q] * df[c_p]).mean()
+
+    # ----------------------------
+    # SLIDER
+    # ----------------------------
+    discount = st.slider("İndirim Oranı (%)", 0, 50, 20)
+
+    # ----------------------------
+    # LEAKAGE (LEVEL 2 MODEL)
+    # ----------------------------
+    leakage = comp_revenue * abs(cross_mean or 0) * (discount / 100) * 30
+
+    # ----------------------------
+    # KPI DEĞERLERİ
+    # ----------------------------
+    o_mean = round(own_mean, 3) if own_mean is not None else 0
+    o_std  = round(own_std,  3) if own_std  is not None else 0
+    c_mean = round(cross_mean, 3) if cross_mean is not None else 0
+    c_std  = round(cross_std,  3) if cross_std  is not None else 0
+    l_pct  = round(lift_pct, 2)  if lift_pct  is not None else 0
+    leak   = round(leakage,  2)  if leakage   is not None else 0
+
+    # ----------------------------
+    # KPI GRID — components.html ile render (st.markdown sanitizer bypass)
+    # ----------------------------
+    kpi_html = """
+    <div class="kpi-grid">
+        <div class="kpi-card blue">
+            <div class="kpi-icon">📉</div>
+            <div class="kpi-label">Rolling Own Elasticity</div>
+            <div class="kpi-value">{o_mean} &plusmn; {o_std}</div>
+            <div class="kpi-change">Zaman değişken model</div>
+        </div>
+        <div class="kpi-card amber">
+            <div class="kpi-icon">🔗</div>
+            <div class="kpi-label">Cross Elasticity</div>
+            <div class="kpi-value">{c_mean} &plusmn; {c_std}</div>
+            <div class="kpi-change">Cannibalization etkisi</div>
+        </div>
+        <div class="kpi-card green">
+            <div class="kpi-icon">🚀</div>
+            <div class="kpi-label">Promo Uplift</div>
+            <div class="kpi-value">{l_pct}%</div>
+            <div class="kpi-change">Treatment vs Control</div>
+        </div>
+        <div class="kpi-card red">
+            <div class="kpi-icon">💰</div>
+            <div class="kpi-label">Revenue Leakage</div>
+            <div class="kpi-value">&#8378;{leak}</div>
+            <div class="kpi-change">Portfolio kaybı</div>
+        </div>
+    </div>
+    """.format(
+        o_mean=o_mean, o_std=o_std,
+        c_mean=c_mean, c_std=c_std,
+        l_pct=l_pct,   leak=leak
+    )
+
+    components.html(
+        f"""<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  body {{
+    margin: 0;
+    padding: 0;
+    background: transparent;
+    font-family: sans-serif;
+  }}
+  .kpi-grid {{
+    display: flex;
+    gap: 1rem;
+    flex-wrap: wrap;
+    width: 100%;
+    box-sizing: border-box;
+  }}
+  .kpi-card {{
+    flex: 1 1 200px;
+    padding: 1.25rem;
+    border-radius: 10px;
+    color: white;
+    box-shadow: 0 4px 6px rgba(0,0,0,0.15);
+  }}
+  .blue  {{ background: linear-gradient(135deg, #1e3a8a, #3b82f6); }}
+  .amber {{ background: linear-gradient(135deg, #b45309, #f59e0b); }}
+  .green {{ background: linear-gradient(135deg, #065f46, #10b981); }}
+  .red   {{ background: linear-gradient(135deg, #991b1b, #ef4444); }}
+  .kpi-icon   {{ font-size: 1.8rem; margin-bottom: 0.4rem; }}
+  .kpi-label  {{ font-size: 0.8rem; opacity: 0.9; font-weight: 600;
+                 text-transform: uppercase; letter-spacing: 0.5px; }}
+  .kpi-value  {{ font-size: 1.5rem; font-weight: bold; margin: 0.25rem 0; }}
+  .kpi-change {{ font-size: 0.78rem; opacity: 0.8; font-style: italic; }}
+</style>
+</head>
+<body>
+{kpi_html}
+</body>
+</html>""",
+        height=170,
+        scrolling=False,
+    )
+
+    # ----------------------------
+    # TIME SERIES VIEW
+    # ----------------------------
+    fig = go.Figure()
+
+    fig.add_trace(go.Scatter(
+        x=df["tarih"],
+        y=df[t_q],
+        name=target,
+        line=dict(width=2)
+    ))
+
+    fig.add_trace(go.Scatter(
+        x=df["tarih"],
+        y=df[c_q],
+        name=competitor,
+        line=dict(dash="dot")
+    ))
+
+    fig.update_layout(margin=dict(t=30, b=20))
+    st.plotly_chart(fig, use_container_width=True)
+
+    # ----------------------------
+    # SIMULATION ENGINE
+    # ----------------------------
+    target_effect     = abs(own_mean   or 0) * discount
+    competitor_effect = (cross_mean    or 0) * discount
+
+    st.success(f"🎯 {target}: +%{round(target_effect, 2)} satış etkisi")
+    st.error(  f"⚠️ {competitor}: -%{round(competitor_effect, 2)} satış etkisi")
+
+    st.caption(
+        "Model: Rolling elasticity + treatment/control uplift + revenue exposure decomposition"
+    )
 
 # ─── APP ROUTER ───────────────────────────────────────────────────────────────
 def main():
@@ -2562,6 +2830,8 @@ def main():
         render_finance_intelligence()
     elif page == "validation":
         render_model_validation()
+    elif page == "promo_opt":          # <-- YENİ SATIR
+        render_promo_optimization()    # <-- YENİ SATIR
     
 
 
